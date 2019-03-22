@@ -17,13 +17,21 @@ from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
 from yolo3.utils import letterbox_image
 import os
 from keras.utils import multi_gpu_model
+import tensorflow as tf
 
+def _dump_ckpt():
+    sess = K.get_session()
+    saver = tf.train.Saver()
+    save_path = saver.save(sess, '/home/xuqian/github_xuqian/keras-yolo3/yolo_tiny.ckpt')
+
+#--model model_data/yolo_tiny_weights.h5 --anchors model_data/tiny_yolo_anchors.txt --classes model_data/voc_classes.txt --gpu_num 2
 class YOLO(object):
     _defaults = {
-        "model_path": 'model_data/yolo.h5',
-        "anchors_path": 'model_data/yolo_anchors.txt',
-        "classes_path": 'model_data/coco_classes.txt',
-        "score" : 0.3,
+        #"model_path": 'model_data/yolo_tiny_weights.h5',
+        "model_path": 'model_data/tiny_yolo_weights_0321.h5',
+        "anchors_path": 'model_data/tiny_yolo_anchors.txt',
+        "classes_path": 'model_data/voc_classes.txt',
+        "score" : 0.005,
         "iou" : 0.45,
         "model_image_size" : (416, 416),
         "gpu_num" : 1,
@@ -72,6 +80,9 @@ class YOLO(object):
             self.yolo_model = tiny_yolo_body(Input(shape=(None,None,3)), num_anchors//2, num_classes) \
                 if is_tiny_version else yolo_body(Input(shape=(None,None,3)), num_anchors//3, num_classes)
             self.yolo_model.load_weights(self.model_path) # make sure model, anchors and classes match
+
+            _dump_ckpt()
+
         else:
             assert self.yolo_model.layers[-1].output_shape[-1] == \
                 num_anchors/len(self.yolo_model.output) * (num_classes + 5), \
@@ -98,6 +109,46 @@ class YOLO(object):
                 len(self.class_names), self.input_image_shape,
                 score_threshold=self.score, iou_threshold=self.iou)
         return boxes, scores, classes
+
+    def evaluate_images(self, image, imagename):
+        if self.model_image_size != (None, None):
+            assert self.model_image_size[0]%32 == 0, 'Multiples of 32 required'
+            assert self.model_image_size[1]%32 == 0, 'Multiples of 32 required'
+            boxed_image = letterbox_image(image, tuple(reversed(self.model_image_size)))
+        else:
+            new_image_size = (image.width - (image.width % 32),
+                              image.height - (image.height % 32))
+            boxed_image = letterbox_image(image, new_image_size)
+        image_data = np.array(boxed_image, dtype='float32')
+
+        image_data /= 255.
+        image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
+
+        out_boxes, out_scores, out_classes = self.sess.run(
+            [self.boxes, self.scores, self.classes],
+            feed_dict={
+                self.yolo_model.input: image_data,
+                self.input_image_shape: [image.size[1], image.size[0]],
+                K.learning_phase(): 0
+            })
+
+        for i, c in reversed(list(enumerate(out_classes))):
+            predicted_class = self.class_names[c]
+            box = out_boxes[i]
+            score = out_scores[i]
+
+            label = '{} {:.2f}'.format(predicted_class, score)
+
+            top, left, bottom, right = box
+            top = max(0, (top + 0.5).astype('float32'))
+            left = max(0, (left + 0.5).astype('float32'))
+            bottom = min(image.size[1], (bottom + 0.5).astype('float32'))
+            right = min(image.size[0], (right + 0.5).astype('float32'))
+            print(imagename, label, (left, top), (right, bottom))
+            with open('results/comp4_det_test_'+predicted_class+'.txt','a') as f:
+                f.write(imagename+' '+ str(score) +' '+str(left)+' '+str(top)+' '+str(right)+' '+str(bottom)+'\n')
+            f.close()
+        return out_boxes, out_scores, out_classes
 
     def detect_image(self, image):
         start = timer()
@@ -209,4 +260,38 @@ def detect_video(yolo, video_path, output_path=""):
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     yolo.close_session()
+
+VOC_LABELS = {
+    'none',
+    'aeroplane',
+    'bicycle',
+    'bird',
+    'boat',
+    'bottle',
+    'bus',
+    'car',
+    'cat',
+    'chair',
+    'cow',
+    'diningtable',
+    'dog',
+    'horse',
+    'motorbike',
+    'person',
+    'pottedplant' ,
+    'sheep',
+    'sofa',
+    'train',
+    'tvmonitor',
+}
+
+def evaluation(yolo):
+    annotation_path = '2007_test.txt'
+    with open(annotation_path) as f:
+        annotation_lines = f.readlines()
+    for lines in annotation_lines:
+        line = lines.split()
+        image = Image.open(line[0])
+        image_name = line[0].split('/')[-1]
+        yolo.evaluate_images(image,image_name)
 
