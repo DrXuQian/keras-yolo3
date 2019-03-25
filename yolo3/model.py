@@ -247,7 +247,7 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
     '''
     assert (true_boxes[..., 4]<num_classes).all(), 'class id must be less than num_classes'
     num_layers = len(anchors)//3 # default setting
-    anchor_mask = [[6,7,8], [3,4,5], [0,1,2]] if num_layers==3 else [[3,4,5], [1,2,3]]
+    anchor_mask = [[6,7,8], [3,4,5], [0,1,2]] if num_layers==3 else [[3,4,5], [0,1,2]]
 
     true_boxes = np.array(true_boxes, dtype='float32')
     input_shape = np.array(input_shape, dtype='int32')
@@ -365,6 +365,10 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=True):
     input_shape = K.cast(K.shape(yolo_outputs[0])[1:3] * 32, K.dtype(y_true[0]))
     grid_shapes = [K.cast(K.shape(yolo_outputs[l])[1:3], K.dtype(y_true[0])) for l in range(num_layers)]
     loss = 0
+    xy_loss_t = 0
+    wh_loss_t = 0
+    cof_loss_t = 0
+    class_loss_t = 0
     m = K.shape(yolo_outputs[0])[0] # batch size, tensor
     mf = K.cast(m, K.dtype(yolo_outputs[0]))
 
@@ -407,6 +411,11 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=True):
         confidence_loss = K.sum(confidence_loss) / mf
         class_loss = K.sum(class_loss) / mf
         loss += xy_loss + wh_loss + confidence_loss + class_loss
-        if print_loss:
-            loss = tf.Print(loss, [loss, xy_loss, wh_loss, confidence_loss, class_loss, K.sum(ignore_mask)], message='loss: ')
+
+        xy_loss_t += xy_loss
+        wh_loss_t += wh_loss
+        cof_loss_t += confidence_loss
+        class_loss_t += class_loss
+    if print_loss:
+        loss = tf.Print(loss, [xy_loss_t, wh_loss_t, cof_loss_t, class_loss_t, K.sum(ignore_mask)], message=' loss_t: ')
     return loss
